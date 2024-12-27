@@ -1,0 +1,7 @@
+2024-12-27 15:50:40,548 - INFO - Document processor started. Watching document_processing/upload
+2024-12-27 15:50:40,548 - INFO - Using model: gpt-4
+2024-12-27 16:40:15,694 - INFO - Document processor started. Watching document_processing/upload
+2024-12-27 16:40:15,695 - INFO - Using model: gpt-4
+2024-12-27 16:43:10,527 - INFO - Document processor started. Watching document_processing/upload
+2024-12-27 16:43:10,527 - INFO - Using model: gpt-4o
+2024-12-27 16:59:54,052 - INFO - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
