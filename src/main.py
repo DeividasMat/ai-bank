@@ -58,18 +58,18 @@ def create_workflow(generate_report: bool = False):
 def run_hedge_fund(ticker: str, start_date: str, end_date: str, portfolio: dict, show_reasoning: bool = False, generate_report: bool = False):
     """
     Run the hedge fund analysis pipeline.
-    
-    Args:
-        ticker (str): Stock ticker symbol
-        start_date (str): Analysis start date
-        end_date (str): Analysis end date
-        portfolio (dict): Current portfolio state
-        show_reasoning (bool): Whether to show detailed agent reasoning
-        generate_report (bool): Whether to generate a PDF report
-        
-    Returns:
-        dict: Final state containing all agent messages and analysis
     """
+    # Check for extracted data first
+    extracted_data_path = Path("document_processing/extracted_data")
+    json_files = list(extracted_data_path.glob("*.json"))
+    extracted_data = None
+    
+    if json_files:
+        # Use the most recent JSON file if multiple exist
+        latest_file = max(json_files, key=lambda x: x.stat().st_mtime)
+        with open(latest_file, 'r') as f:
+            extracted_data = json.load(f)
+    
     # Create workflow based on whether report generation is needed
     app = create_workflow(generate_report)
     
@@ -85,6 +85,7 @@ def run_hedge_fund(ticker: str, start_date: str, end_date: str, portfolio: dict,
                 "portfolio": portfolio,
                 "start_date": start_date,
                 "end_date": end_date,
+                "extracted_data": extracted_data  # Add extracted data to the state
             },
             "metadata": {
                 "show_reasoning": show_reasoning,
@@ -150,46 +151,37 @@ def add_pe_analysis(args, existing_analysis=None):
         return {"error": str(e)}
 
 def main():
-    # Get the original parser
+    print("Starting main process...")
+    
+    # Parse arguments
     parser = argparse.ArgumentParser(description='AI Bank Analysis Tools')
+    parser.add_argument('--report', action='store_true', help='Generate analysis report')
+    parser.add_argument('--show-reasoning', action='store_true', help='Show agent reasoning')
+    args = parser.parse_args()
     
-    # Add PE analysis arguments without removing existing ones
-    parser.add_argument('--pe-analysis', action='store_true', help='Add Private Equity analysis')
-    parser.add_argument('--file', type=str, help='Path to financial data file (for PE analysis)')
+    print(f"Report flag: {args.report}")
     
-    # Parse known args to handle both existing and new arguments
-    args, unknown = parser.parse_known_args()
-    
-    # Run original main functionality if it exists
-    try:
-        result = original_main(args)
-    except Exception as e:
-        result = None
-    
-    # Add PE analysis if requested
-    if args.pe_analysis:
-        pe_result = add_pe_analysis(args, existing_analysis=result)
-        
-        if result is not None and pe_result is not None:
-            # Combine results if we have both
-            result = {
-                **result,
-                "pe_analysis": pe_result
-            }
+    if args.report:
+        print("Initializing report generation...")
+        try:
+            # Create an instance of report agent
+            from agents.report import report_agent
             
-            # Update the saved results
-            output_dir = Path("analysis_results")
-            output_dir.mkdir(exist_ok=True)
+            # Create initial state
+            initial_state = AgentState(
+                messages=[],
+                data={},
+                metadata={"show_reasoning": args.show_reasoning}
+            )
             
-            if hasattr(args, 'ticker'):
-                output_file = output_dir / f"{args.ticker}_analysis.json"
-            else:
-                output_file = output_dir / f"analysis_{datetime.now():%Y%m%d_%H%M%S}.json"
-                
-            with open(output_file, 'w') as f:
-                json.dump(result, f, indent=2)
-    
-    return result
+            # Call report agent directly
+            print("Calling report agent...")
+            final_state = report_agent(initial_state)
+            print("Report agent finished")
+            
+        except Exception as e:
+            print(f"Error during report generation: {str(e)}")
+            raise e
 
 if __name__ == "__main__":
     main()
