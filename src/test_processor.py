@@ -6,7 +6,7 @@ def test_processor():
     print("Starting processor test...")
     
     # Initialize processor
-    processor = FinancialDocumentProcessor(model_name="gpt-4")
+    processor = FinancialDocumentProcessor(model_name="gpt-4o")
     print(f"Processor initialized with directories:")
     for name, path in processor.directories.items():
         print(f"- {name}: {path}")

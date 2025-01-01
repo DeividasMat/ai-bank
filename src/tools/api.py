@@ -2,8 +2,117 @@ import os
 from typing import Dict, Any, List
 import pandas as pd
 import requests
+import logging
+from pathlib import Path
 
-import requests
+class FinancialDataAPI:
+    """API client for fetching financial data."""
+    
+    def __init__(self):
+        self.base_url = "https://financialmodelingprep.com/api/v3"
+        self.api_key = os.getenv("FMP_API_KEY")
+        self.setup_logging()
+
+    def setup_logging(self):
+        """Configure logging."""
+        log_dir = Path("document_processing/logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        log_file = log_dir / "api.log"
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+
+    def get_financial_statements(self, ticker: str) -> Dict[str, Any]:
+        """Fetch financial statements for a company."""
+        try:
+            financial_data = {
+                "financial_data": {
+                    "balance_sheet": self._get_balance_sheet(ticker),
+                    "income_statement": self._get_income_statement(ticker),
+                    "cash_flow": self._get_cash_flow(ticker)
+                }
+            }
+            return financial_data
+        except Exception as e:
+            self.logger.error(f"Error fetching financial data for {ticker}: {e}")
+            return {}
+
+    def _get_balance_sheet(self, ticker: str) -> Dict[str, Any]:
+        """Fetch balance sheet data."""
+        try:
+            url = f"{self.base_url}/balance-sheet-statement/{ticker}?apikey={self.api_key}&limit=1"
+            response = requests.get(url)
+            data = response.json()
+            
+            if data and isinstance(data, list):
+                latest = data[0]
+                return {
+                    "total_debt": latest.get("totalDebt", 0),
+                    "total_assets": latest.get("totalAssets", 0),
+                    "total_equity": latest.get("totalStockholdersEquity", 0),
+                    "enterprise_value": latest.get("enterpriseValue", 0)
+                }
+            return {}
+        except Exception as e:
+            self.logger.error(f"Error fetching balance sheet for {ticker}: {e}")
+            return {}
+
+    def _get_income_statement(self, ticker: str) -> Dict[str, Any]:
+        """Fetch income statement data."""
+        try:
+            url = f"{self.base_url}/income-statement/{ticker}?apikey={self.api_key}&limit=2"
+            response = requests.get(url)
+            data = response.json()
+            
+            if data and isinstance(data, list) and len(data) >= 2:
+                latest = data[0]
+                previous = data[1]
+                
+                revenue = latest.get("revenue", 0)
+                prev_revenue = previous.get("revenue", 0)
+                ebitda = latest.get("ebitda", 0)
+                prev_ebitda = previous.get("ebitda", 0)
+                net_income = latest.get("netIncome", 0)
+                prev_net_income = previous.get("netIncome", 0)
+                
+                return {
+                    "revenue": revenue,
+                    "operating_income": latest.get("operatingIncome", 0),
+                    "ebitda": ebitda,
+                    "net_income": net_income,
+                    "revenue_growth": (revenue - prev_revenue) / prev_revenue if prev_revenue else 0,
+                    "ebitda_growth": (ebitda - prev_ebitda) / prev_ebitda if prev_ebitda else 0,
+                    "net_income_growth": (net_income - prev_net_income) / prev_net_income if prev_net_income else 0
+                }
+            return {}
+        except Exception as e:
+            self.logger.error(f"Error fetching income statement for {ticker}: {e}")
+            return {}
+
+    def _get_cash_flow(self, ticker: str) -> Dict[str, Any]:
+        """Fetch cash flow data."""
+        try:
+            url = f"{self.base_url}/cash-flow-statement/{ticker}?apikey={self.api_key}&limit=1"
+            response = requests.get(url)
+            data = response.json()
+            
+            if data and isinstance(data, list):
+                latest = data[0]
+                return {
+                    "operating_cash_flow": latest.get("operatingCashFlow", 0),
+                    "capital_expenditures": abs(latest.get("capitalExpenditure", 0))
+                }
+            return {}
+        except Exception as e:
+            self.logger.error(f"Error fetching cash flow for {ticker}: {e}")
+            return {}
 
 def get_financial_metrics(
     ticker: str,

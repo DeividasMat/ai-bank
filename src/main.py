@@ -10,10 +10,12 @@ from agents.sentiment import sentiment_agent
 from agents.report import report_agent
 from agents.state import AgentState
 from tools.setup import ensure_report_directory
+from agents.pe_analysis import PEAnalysisAgent
 
 import argparse
 from datetime import datetime
 import json
+from pathlib import Path
 
 ##### Run the Hedge Fund #####
 def create_workflow(generate_report: bool = False):
@@ -110,63 +112,84 @@ def get_default_dates():
     )
     return start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d')
 
-if __name__ == "__main__":
-    # Set up command line arguments
-    parser = argparse.ArgumentParser(description='Run the hedge fund trading system')
-    parser.add_argument('--ticker', type=str, required=True, help='Stock ticker symbol')
-    parser.add_argument('--start-date', type=str, help='Start date (YYYY-MM-DD). Defaults to 3 months before end date')
-    parser.add_argument('--end-date', type=str, help='End date (YYYY-MM-DD). Defaults to today')
-    parser.add_argument('--show-reasoning', action='store_true', help='Show reasoning from each agent')
-    parser.add_argument('--report', action='store_true', help='Generate PDF report')
-    
-    args = parser.parse_args()
-    
-    # Only create reports directory if report generation is requested
-    if args.report:
-        ensure_report_directory()
-    
-    # Validate and set dates
-    if args.start_date:
-        validate_date(args.start_date, "Start date")
-    if args.end_date:
-        validate_date(args.end_date, "End date")
-        
-    # Get default dates if not provided
-    if not args.start_date or not args.end_date:
-        default_start, default_end = get_default_dates()
-        args.start_date = args.start_date or default_start
-        args.end_date = args.end_date or default_end
-    
-    # Initialize portfolio
-    portfolio = {
-        "cash": 100000.0,  # $100,000 initial cash
-        "stock": 0         # No initial stock position
-    }
-    
+def add_pe_analysis(args, existing_analysis=None):
+    """Add PE analysis without interfering with existing functionality"""
     try:
-        # Run the analysis
-        result = run_hedge_fund(
-            ticker=args.ticker,
-            start_date=args.start_date,
-            end_date=args.end_date,
-            portfolio=portfolio,
-            show_reasoning=args.show_reasoning,
-            generate_report=args.report
-        )
+        pe_agent = PEAnalysisAgent()
         
-        # Extract and display report information if generated
-        if args.report:
-            report_message = next(msg for msg in result["messages"] if msg.name == "report_agent")
-            report_file = json.loads(report_message.content)["report_file"]
-            print(f"\nPDF Report generated: {report_file}")
-        
-        # Extract portfolio decision
-        portfolio_message = next(msg for msg in result["messages"] if msg.name == "portfolio_management")
-        
-        # Display results
-        print("\nFinal Portfolio Decision:")
-        print(portfolio_message.content)
+        if existing_analysis:
+            # If we have existing analysis, use it
+            temp_path = Path("document_processing/extracted_data/temp_analysis.json")
+            temp_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(temp_path, 'w') as f:
+                json.dump(existing_analysis, f, indent=2)
+            
+            pe_result = pe_agent.analyze_company(str(temp_path))
+            
+            # Clean up
+            if temp_path.exists():
+                temp_path.unlink()
+                
+        elif args.file:
+            # Use provided file for standalone PE analysis
+            pe_result = pe_agent.analyze_company(args.file)
+        else:
+            return None
+
+        if "error" not in pe_result:
+            print("\n=== Private Equity Analysis ===")
+            print("\nFinancial Metrics:")
+            print(pe_result["formatted_metrics"])
+            print("\nMetrics Analysis:")
+            print(pe_result["metrics_summary"])
+            
+        return pe_result
         
     except Exception as e:
-        print(f"\nError during analysis: {str(e)}")
-        raise
+        print(f"\nPE Analysis Error: {str(e)}")
+        return {"error": str(e)}
+
+def main():
+    # Get the original parser
+    parser = argparse.ArgumentParser(description='AI Bank Analysis Tools')
+    
+    # Add PE analysis arguments without removing existing ones
+    parser.add_argument('--pe-analysis', action='store_true', help='Add Private Equity analysis')
+    parser.add_argument('--file', type=str, help='Path to financial data file (for PE analysis)')
+    
+    # Parse known args to handle both existing and new arguments
+    args, unknown = parser.parse_known_args()
+    
+    # Run original main functionality if it exists
+    try:
+        result = original_main(args)
+    except Exception as e:
+        result = None
+    
+    # Add PE analysis if requested
+    if args.pe_analysis:
+        pe_result = add_pe_analysis(args, existing_analysis=result)
+        
+        if result is not None and pe_result is not None:
+            # Combine results if we have both
+            result = {
+                **result,
+                "pe_analysis": pe_result
+            }
+            
+            # Update the saved results
+            output_dir = Path("analysis_results")
+            output_dir.mkdir(exist_ok=True)
+            
+            if hasattr(args, 'ticker'):
+                output_file = output_dir / f"{args.ticker}_analysis.json"
+            else:
+                output_file = output_dir / f"analysis_{datetime.now():%Y%m%d_%H%M%S}.json"
+                
+            with open(output_file, 'w') as f:
+                json.dump(result, f, indent=2)
+    
+    return result
+
+if __name__ == "__main__":
+    main()
