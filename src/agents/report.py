@@ -9,9 +9,22 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
+from src.agents.search_agent import SearchAgent
+from dotenv import load_dotenv
+import os
+from typing import Dict, Any, List
+from agents.market_research import market_research_agent
+from agents.pe_analysis import pe_analysis_agent
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain.chains import LLMChain
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv()
+PERPLEXITY_API_KEY = os.getenv('PERPLEXITY_API_KEY')
 
 class PEReport(FPDF):
     def __init__(self):
@@ -661,3 +674,311 @@ def report_agent(state):
         raise e
         
     return state 
+
+class Report:
+    def __init__(self):
+        self.llm = ChatOpenAI(model_name="gpt-4")
+        self.report_dir = Path("document_processing/reports")
+        self.report_dir.mkdir(parents=True, exist_ok=True)
+
+    def __call__(self, financial_data: Dict[str, Any]) -> Dict[str, Any]:
+        return self.generate(financial_data)
+
+    def generate(self, financial_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate complete report and save as PDF."""
+        try:
+            print("\nStarting data collection and analysis phase...")
+            
+            # Phase 1: Load Financial Data
+            print("\nPhase 1: Loading financial data...")
+            extracted_data_dir = Path("document_processing/extracted_data")
+            json_files = list(extracted_data_dir.glob("*.json"))
+            if not json_files:
+                raise FileNotFoundError("No financial data files found in document_processing/extracted_data/")
+            
+            latest_file = max(json_files, key=lambda x: x.stat().st_mtime)
+            print(f"Found latest financial data: {latest_file}")
+            
+            with open(latest_file, 'r') as f:
+                financial_data = json.load(f)
+            
+            company_name = list(financial_data.keys())[0].replace('_', ' ')
+            print(f"Analyzing data for: {company_name}")
+            
+            # Phase 2: Market Research with Perplexity
+            print(f"\nPhase 2: Starting market research for {company_name}...")
+            print("Initiating Perplexity article search...")
+            market_research_agent.search_articles(company_name)
+            print("✓ Perplexity article search complete")
+            
+            # Phase 3: Analyze Latest Raw Response
+            print("\nPhase 3: Analyzing latest Perplexity response...")
+            raw_responses_dir = Path("document_processing/articles/raw_responses")
+            raw_response_files = list(raw_responses_dir.glob("raw_response_*.txt"))
+            
+            if not raw_response_files:
+                raise FileNotFoundError("No Perplexity responses found")
+            
+            latest_response = max(raw_response_files, key=lambda x: x.stat().st_mtime)
+            print(f"Found latest response file: {latest_response}")
+            
+            with open(latest_response, 'r') as f:
+                raw_response = f.read()
+            
+            print("\nAnalyzing market research with GPT-4...")
+            market_analysis = self.analyze_perplexity_response(raw_response, company_name)
+            print("✓ Market research analysis complete")
+            
+            # Phase 4: Financial Analysis
+            print("\nPhase 4: Performing financial analysis...")
+            pe_data = pe_analysis_agent.analyze(financial_data)
+            print("✓ Financial analysis complete")
+            
+            # Phase 5: Generate Final Report
+            print("\nPhase 5: Generating comprehensive report...")
+            report_data = {
+                "company_name": company_name,
+                "financial_data": financial_data,
+                "pe_analysis": pe_data,
+                "market_analysis": {
+                    "analysis": market_analysis.content,
+                    "source": latest_response.name,
+                    "analyzed_date": datetime.now().isoformat()
+                },
+                "report_date": datetime.now().isoformat()
+            }
+            
+            final_report = self.generate_report_content(report_data)
+            
+            # Phase 6: Save Report
+            print("\nPhase 6: Saving final report...")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_dir = Path("reports")
+            report_path = report_dir / f"{company_name}_report_{timestamp}.pdf"
+            self.save_as_pdf(final_report, report_path)
+            
+            print(f"\n✓ Report generation complete")
+            print(f"✓ Report saved to: {report_path}")
+            return final_report
+
+        except Exception as e:
+            print(f"Error generating report: {e}")
+            raise
+
+    def generate_with_market_research(self, financial_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate report after market research is complete."""
+        try:
+            company_name = list(financial_data.keys())[0].replace('_', ' ')
+            
+            # Phase 1: Load Financial Analysis
+            print("\nPhase 1: Loading financial analysis...")
+            pe_data = pe_analysis_agent.analyze(financial_data)
+            
+            # Phase 2: Load and Analyze Perplexity Data
+            print("\nPhase 2: Loading Perplexity research data...")
+            raw_responses_dir = Path("document_processing/articles/raw_responses")
+            raw_response_files = list(raw_responses_dir.glob("raw_response_*.txt"))
+            
+            if not raw_response_files:
+                raise FileNotFoundError("No Perplexity responses found. Please run article search first.")
+            
+            latest_response = max(raw_response_files, key=lambda x: x.stat().st_mtime)
+            print(f"Found latest Perplexity response: {latest_response}")
+            
+            with open(latest_response, 'r') as f:
+                raw_response = f.read()
+            
+            # Analyze Perplexity data
+            print("Analyzing market research data with citations...")
+            market_analysis = self.analyze_perplexity_response(raw_response, company_name)
+            print("✓ Market research analysis complete")
+            
+            # Phase 3: Generate Final Report
+            print("\nPhase 3: Generating comprehensive report...")
+            report_data = {
+                "company_name": company_name,
+                "financial_data": financial_data,
+                "pe_analysis": pe_data,
+                "market_analysis": {
+                    "analysis": market_analysis.content,
+                    "source": latest_response.name,
+                    "analyzed_date": datetime.now().isoformat()
+                },
+                "report_date": datetime.now().isoformat()
+            }
+            
+            final_report = self.generate_report_content(report_data)
+            
+            # Phase 4: Save Report
+            print("\nPhase 4: Saving final report...")
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_dir = Path("reports")
+            report_path = report_dir / f"{company_name}_report_{timestamp}.pdf"
+            self.save_as_pdf(final_report, report_path)
+            
+            print(f"\n✓ Report generation complete")
+            print(f"✓ Report saved to: {report_path}")
+            return final_report
+
+        except Exception as e:
+            print(f"Error generating report: {e}")
+            raise
+
+    def generate_report_content(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate report content using LangChain."""
+        try:
+            # Create prompt template with emphasis on market research and citations
+            template = """
+            Generate a comprehensive financial report for {company_name}.
+
+            Financial Analysis:
+            {pe_analysis}
+
+            Market Research and News Analysis:
+            {market_analysis}
+
+            Please structure the report with the following sections:
+            1. Executive Summary
+            2. Financial Analysis
+               - Key Financial Metrics
+               - Ratio Analysis
+               - Performance Trends
+            3. Market Analysis & News
+               - Key Market Developments (with citations)
+               - Competitive Landscape
+               - Industry Trends
+               - News Analysis with Sources
+            4. Risk Assessment
+               - Financial Risks
+               - Market Risks
+               - Regulatory Risks (cite relevant news)
+            5. Future Outlook
+            6. References & Citations
+               - List all news sources used
+
+            Important:
+            - Include specific citations for market research claims
+            - Reference specific articles when discussing market developments
+            - Use financial data to support analysis
+            - Maintain professional tone and format
+            """
+
+            prompt = ChatPromptTemplate.from_template(template)
+            chain = prompt | self.llm
+
+            # Generate report with citations
+            report_content = chain.invoke({
+                "company_name": data["company_name"],
+                "pe_analysis": json.dumps(data["pe_analysis"], indent=2),
+                "market_analysis": json.dumps(data["market_analysis"], indent=2)  # Use market_analysis directly
+            })
+
+            return {
+                "content": report_content.content,
+                "metadata": {
+                    "company": data["company_name"],
+                    "date": data["report_date"],
+                    "sources": data["market_analysis"].get("source", "")  # Get source from market_analysis
+                }
+            }
+
+        except Exception as e:
+            print(f"Error generating report content: {e}")
+            raise
+
+    def save_as_pdf(self, report_content: Dict[str, Any], output_path: Path) -> None:
+        """Save report as PDF."""
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            
+            # Create PDF document
+            doc = SimpleDocTemplate(str(output_path), pagesize=letter)
+            styles = getSampleStyleSheet()
+            story = []
+
+            # Add title
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=24,
+                spaceAfter=30
+            )
+            title = Paragraph(f"Financial Report: {report_content['metadata']['company']}", title_style)
+            story.append(title)
+            story.append(Spacer(1, 12))
+
+            # Add date
+            date_style = ParagraphStyle(
+                'Date',
+                parent=styles['Normal'],
+                fontSize=12,
+                spaceAfter=20
+            )
+            date = Paragraph(f"Generated on: {report_content['metadata']['date']}", date_style)
+            story.append(date)
+            story.append(Spacer(1, 20))
+
+            # Add content
+            content_style = ParagraphStyle(
+                'Content',
+                parent=styles['Normal'],
+                fontSize=12,
+                leading=14,
+                spaceAfter=12
+            )
+
+            # Split content into paragraphs and add to story
+            paragraphs = report_content['content'].split('\n')
+            for para in paragraphs:
+                if para.strip():
+                    p = Paragraph(para, content_style)
+                    story.append(p)
+                    story.append(Spacer(1, 12))
+
+            # Build PDF
+            doc.build(story)
+            print(f"PDF report saved successfully to: {output_path}")
+
+        except Exception as e:
+            print(f"Error saving PDF: {e}")
+            raise
+
+    def analyze_perplexity_response(self, raw_response: str, company_name: str) -> Dict[str, Any]:
+        """Analyze Perplexity raw response with GPT-4 and extract citations."""
+        analysis_prompt = f"""
+        Analyze this Perplexity API response about {company_name} and provide a detailed analysis with citations.
+        
+        Raw Response:
+        {raw_response}
+        
+        Please provide:
+        1. Key Findings:
+           - Major developments
+           - Market trends
+           - Company updates
+           - Industry insights
+        
+        2. Detailed Analysis:
+           - Market position
+           - Competitive landscape
+           - Growth opportunities
+           - Risk factors
+        
+        3. Citations:
+           For each key point, include:
+           - Source name
+           - Date (if available)
+           - Brief quote or summary
+           - URL (if provided)
+        
+        Format citations as: [Source Name, Date] Quote/Summary
+        
+        Ensure all significant claims are supported by specific citations from the response.
+        """
+        
+        return self.llm.invoke(analysis_prompt)
+
+# Keep existing report agent instance
+report_agent = Report() 

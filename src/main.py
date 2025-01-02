@@ -16,6 +16,7 @@ import argparse
 from datetime import datetime
 import json
 from pathlib import Path
+import subprocess
 
 ##### Run the Hedge Fund #####
 def create_workflow(generate_report: bool = False):
@@ -150,6 +151,17 @@ def add_pe_analysis(args, existing_analysis=None):
         print(f"\nPE Analysis Error: {str(e)}")
         return {"error": str(e)}
 
+def run_financial_analysis():
+    # ... (keep existing financial analysis code)
+    
+    # Add search service after financial analysis
+    try:
+        print("\nStarting Article Search...")
+        subprocess.run(["poetry", "run", "python", "src/search_service.py"], check=True)
+        print("Article Search Complete")
+    except Exception as e:
+        print(f"Article search error: {e}")
+
 def main():
     print("Starting main process...")
     
@@ -182,6 +194,8 @@ def main():
         except Exception as e:
             print(f"Error during report generation: {str(e)}")
             raise e
+
+        run_financial_analysis()  # This will now include the search
 
 if __name__ == "__main__":
     main()
