@@ -11,6 +11,7 @@ from agents.report import report_agent
 from agents.state import AgentState
 from tools.setup import ensure_report_directory
 from agents.pe_analysis import PEAnalysisAgent
+from agents.market_research import MarketResearch
 
 import argparse
 from datetime import datetime
@@ -152,15 +153,21 @@ def add_pe_analysis(args, existing_analysis=None):
         return {"error": str(e)}
 
 def run_financial_analysis():
-    # ... (keep existing financial analysis code)
-    
-    # Add search service after financial analysis
     try:
+        # Existing financial analysis code...
+        
+        # Add market research before article search
+        print("\nStarting Market Research...")
+        market_research = MarketResearch()
+        market_research.search_articles()  # Will automatically get company name from JSON
+        print("Market Research Complete")
+        
+        # Existing article search
         print("\nStarting Article Search...")
         subprocess.run(["poetry", "run", "python", "src/search_service.py"], check=True)
         print("Article Search Complete")
     except Exception as e:
-        print(f"Article search error: {e}")
+        print(f"Analysis error: {e}")
 
 def main():
     print("Starting main process...")
@@ -191,11 +198,12 @@ def main():
             final_state = report_agent(initial_state)
             print("Report agent finished")
             
+            # Run financial analysis and market research
+            run_financial_analysis()
+            
         except Exception as e:
             print(f"Error during report generation: {str(e)}")
             raise e
-
-        run_financial_analysis()  # This will now include the search
 
 if __name__ == "__main__":
     main()

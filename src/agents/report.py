@@ -684,6 +684,44 @@ class Report:
     def __call__(self, financial_data: Dict[str, Any]) -> Dict[str, Any]:
         return self.generate(financial_data)
 
+    def find_company_name_with_gpt4(self, financial_data: Dict[str, Any]) -> str:
+        """Extract company name from financial data using GPT-4."""
+        try:
+            print("\nExtracting company name using GPT-4...")
+            
+            messages = [
+                {
+                    "role": "system",
+                    "content": """You are a financial data analyzer. Find the actual company name in this financial data.
+                              Return ONLY the company name, no additional text or explanation."""
+                },
+                {
+                    "role": "user",
+                    "content": f"""Find and return ONLY the company name from this financial data:
+                            {json.dumps(financial_data, indent=2)}"""
+                }
+            ]
+            
+            # Format messages for LangChain
+            from langchain_core.messages import SystemMessage, HumanMessage
+            formatted_messages = [
+                SystemMessage(content=messages[0]["content"]),
+                HumanMessage(content=messages[1]["content"])
+            ]
+            
+            response = self.llm.invoke(formatted_messages)
+            company_name = response.content.strip()
+            
+            if not company_name or company_name.lower() in ["company name", "unknown", "none", "company"]:
+                raise ValueError(f"Invalid company name extracted: {company_name}")
+            
+            print(f"Found company name: {company_name}")
+            return company_name
+            
+        except Exception as e:
+            print(f"Error extracting company name: {e}")
+            raise
+
     def generate(self, financial_data: Dict[str, Any]) -> Dict[str, Any]:
         """Generate complete report and save as PDF."""
         try:
@@ -702,8 +740,9 @@ class Report:
             with open(latest_file, 'r') as f:
                 financial_data = json.load(f)
             
-            company_name = list(financial_data.keys())[0].replace('_', ' ')
-            print(f"Analyzing data for: {company_name}")
+            # Extract company name using GPT-4
+            company_name = self.find_company_name_with_gpt4(financial_data)
+            print(f"\nAnalyzing data for: {company_name}")
             
             # Phase 2: Market Research with Perplexity
             print(f"\nPhase 2: Starting market research for {company_name}...")

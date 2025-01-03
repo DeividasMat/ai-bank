@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 import os
 from pathlib import Path
 from openai import OpenAI
+import json
 
 # Load environment variables
 load_dotenv()
@@ -22,70 +23,204 @@ class MarketResearch:
             base_url="https://api.perplexity.ai"
         )
 
-    def analyze(self, financial_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Get market research data for the report"""
+    def get_latest_company_name(self) -> str:
+        """Get company name from the latest JSON file using GPT-4."""
         try:
-            # Get company name from financial data
-            company_name = list(financial_data.keys())[0].replace('_', ' ')
+            # Get the absolute path to the extracted_data directory
+            base_dir = Path.cwd()
+            json_dir = base_dir / "document_processing" / "extracted_data"
             
-            # Get negative news and lawsuits using Perplexity
-            citations = self.search_agent.search_articles(company_name)
+            print(f"\nLooking for JSON files in: {json_dir}")
             
-            # Format data for the report
-            market_data = {
-                "company": company_name,
-                "market_analysis": {
-                    "negative_news": [],
-                    "lawsuits": [],
-                    "regulatory_issues": [],
-                    "competition_threats": []
-                },
-                "sources": citations
-            }
+            if not json_dir.exists():
+                raise FileNotFoundError(f"Directory not found: {json_dir}")
             
-            # Categorize findings
-            for citation in citations:
-                if 'lawsuit' in citation.get('title', '').lower():
-                    market_data["market_analysis"]["lawsuits"].append(citation)
-                elif 'regulation' in citation.get('title', '').lower():
-                    market_data["market_analysis"]["regulatory_issues"].append(citation)
-                elif 'competitor' in citation.get('title', '').lower():
-                    market_data["market_analysis"]["competition_threats"].append(citation)
-                else:
-                    market_data["market_analysis"]["negative_news"].append(citation)
+            json_files = list(json_dir.glob("*.json"))
+            if not json_files:
+                raise FileNotFoundError(f"No JSON files found in {json_dir}")
             
-            return market_data
-
+            # Get the most recent JSON file
+            latest_json = max(json_files, key=lambda x: x.stat().st_mtime)
+            print(f"Found latest JSON file: {latest_json}")
+            
+            # Read the JSON content
+            with open(latest_json, 'r') as f:
+                data = json.load(f)
+            
+            def extract_with_gpt4(json_data: dict) -> str:
+                """Helper function to extract company name using GPT-4."""
+                messages = [
+                    {
+                        "role": "system",
+                        "content": """You are a financial data analyzer. Your task is to find the actual company name 
+                        in this financial data. Return ONLY the real company name, no other text. 
+                        If you see 'company_name' as a literal string, ignore it and find the actual company name 
+                        from the financial data."""
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""Find the actual company name from this financial data. 
+                        Return ONLY the company name, nothing else.
+                        Ignore any literal 'company_name' strings and find the real company name.
+                        
+                        JSON Data:
+                        {json.dumps(json_data, indent=2)}"""
+                    }
+                ]
+                
+                client = OpenAI()
+                response = client.chat.completions.create(
+                    model="gpt-4",
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=50
+                )
+                
+                return response.choices[0].message.content.strip()
+            
+            # First attempt with direct access
+            company_name = data.get("company_name", "")
+            print(f"\nInitially found name: {company_name}")
+            
+            # If we got "company_name" or similar invalid values, try GPT-4
+            if not company_name or company_name.lower() in ["company_name", "unknown", "none", "company"]:
+                print("Initial name invalid, trying GPT-4 extraction...")
+                company_name = extract_with_gpt4(data)
+                print(f"GPT-4 extracted name: {company_name}")
+                
+                # If still invalid, try one more time with different prompt
+                if company_name.lower() in ["company_name", "unknown", "none", "company"]:
+                    print("First GPT-4 attempt invalid, trying again with financial data focus...")
+                    messages = [
+                        {
+                            "role": "system",
+                            "content": """You are a financial document analyzer. Look through the financial statements,
+                            metrics, and data to identify the actual company this data belongs to. Return ONLY the 
+                            company name, no other text."""
+                        },
+                        {
+                            "role": "user",
+                            "content": f"What company does this financial data belong to?\n{json.dumps(data, indent=2)}"
+                        }
+                    ]
+                    
+                    response = client.chat.completions.create(
+                        model="gpt-4",
+                        messages=messages,
+                        temperature=0,
+                        max_tokens=50
+                    )
+                    
+                    company_name = response.choices[0].message.content.strip()
+                    print(f"Second GPT-4 attempt extracted: {company_name}")
+            
+            # Final validation
+            if not company_name or company_name.lower() in ["company_name", "unknown", "none", "company"]:
+                raise ValueError(f"Could not extract valid company name after multiple attempts")
+            
+            print(f"\nFinal extracted company name: {company_name}")
+            return company_name
+                
         except Exception as e:
-            print(f"Error in market research: {e}")
-            return {}
+            print(f"\nError getting company name: {e}")
+            print(f"Current working directory: {Path.cwd()}")
+            raise
 
-    def search_articles(self, company_name: str) -> None:
-        """Search for articles using Perplexity API."""
+    def get_associated_names(self, company_name: str) -> list:
+        """Get list of all associated company names and tables."""
         try:
-            print(f"\nSearching for articles about {company_name}...")
+            print(f"\nFinding all associated names for {company_name}...")
+            
+            messages = [
+                {
+                    "role": "system",
+                    "content": "You are a company data analyst. List all associated names and tables for the given company."
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+                    List of tables and associated names for {company_name}.
+                    
+                    Please provide:
+                    1. List all table names from financial statements
+                    2. List all associated company names, including:
+                       - Legal entity names
+                       - Trading names
+                       - Brand names
+                       - Subsidiary names
+                       - Parent company names
+                       - Historical names
+                       
+                    Return ONLY the names in a clear list format, no additional text.
+                    """
+                }
+            ]
+            
+            print("Getting associated names...")
+            response = self.client.chat.completions.create(
+                model="llama-3.1-sonar-large-128k-online",
+                messages=messages
+            )
+            
+            names = response.choices[0].message.content.strip().split('\n')
+            names = [name.strip() for name in names if name.strip()]
+            print("\nFound associated names:")
+            for name in names:
+                print(f"- {name}")
+            
+            return names
+            
+        except Exception as e:
+            print(f"Error getting associated names: {e}")
+            raise
+
+    def search_articles(self, company_name: str = None) -> None:
+        """Search for negative news and lawsuits using Perplexity API."""
+        try:
+            # Get company name if not provided
+            if company_name is None:
+                company_name = self.get_latest_company_name()
+            
+            # First get all associated names
+            associated_names = self.get_associated_names(company_name)
+            
+            print(f"\nSearching for negative news and lawsuits...")
             print("==================================================\n")
             
             messages = [
                 {
                     "role": "system",
                     "content": (
-                        "You are a financial research assistant. Please find and analyze "
-                        "recent news articles and market information about the specified company."
+                        "You are a thorough investigative researcher. Find and analyze negative news, "
+                        "lawsuits, controversies, and potential risks about the specified company and its associated entities. "
+                        "Be comprehensive and factual in your findings."
                     )
                 },
                 {
                     "role": "user",
                     "content": f"""
-                    Find recent news articles and market analysis about {company_name}.
-                    Focus on:
-                    1. Financial performance and metrics
-                    2. Market position and competitive analysis
-                    3. Strategic initiatives and developments
-                    4. Industry trends and market conditions
-                    5. Regulatory environment and risks
+                    Research and analyze negative information about the following company names:
+                    {json.dumps(associated_names, indent=2)}
                     
-                    Please provide detailed information with specific sources, dates, and citations.
+                    For each name/entity, analyze:
+                    1. Active and past lawsuits
+                    2. Legal troubles and investigations
+                    3. Regulatory violations and fines
+                    4. Corporate scandals or controversies
+                    5. Environmental violations
+                    6. Labor disputes
+                    7. Customer complaints and product issues
+                    8. Financial irregularities or concerns
+                    
+                    Please provide:
+                    - Which company name/entity each issue relates to
+                    - Specific dates and details of incidents
+                    - Status of legal proceedings
+                    - Financial impact when available
+                    - Sources and citations for each issue
+                    - Current status of each situation
+                    
+                    Focus on factual information and credible sources only.
                     """
                 }
             ]
@@ -101,6 +236,7 @@ class MarketResearch:
             # Save raw response
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             raw_response_dir = Path("document_processing/articles/raw_responses")
+            raw_response_dir.mkdir(parents=True, exist_ok=True)
             raw_response_path = raw_response_dir / f"raw_response_{timestamp}.txt"
             
             with open(raw_response_path, 'w') as f:

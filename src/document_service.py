@@ -1,3 +1,4 @@
+import os
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import time
@@ -7,9 +8,22 @@ from agents.document_processor import FinancialDocumentProcessor
 from agents.pe_analysis import PEAnalysisAgent
 from typing import Dict, Any
 from tqdm import tqdm
-from document_processor import DocumentProcessor
 from src.agents.search_agent import SearchAgent
-from src.config import PERPLEXITY_API_KEY
+import sys
+from dotenv import load_dotenv
+import json
+from langchain.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+import PyPDF2
+from datetime import datetime
+
+# Load environment variables from .env file
+load_dotenv(dotenv_path=Path(__file__).parent.parent / '.env')
+
+# Add src directory to Python path
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+from agents.document_processor import FinancialDocumentProcessor  # This is the correct class name
 
 class DocumentEventHandler(FileSystemEventHandler):
     def __init__(self, processor, pe_analyzer):
@@ -82,47 +96,122 @@ def run_processor(watch_mode: bool = False):
         
         observer.join()
 
-def process_document(file_path: str) -> Dict[str, Any]:
-    processor = DocumentProcessor()
-    result = processor.process_document(file_path)
-    
-    # After document processing, run the search agent
+def extract_company_name(pdf_text: str) -> str:
+    """Extract company name using GPT-4."""
     try:
-        extracted_dir = Path("document_processing/extracted")
-        json_files = list(extracted_dir.glob("*.json"))
-        if json_files:
-            latest_json = max(json_files, key=lambda x: x.stat().st_mtime)
-            search_agent = SearchAgent(perplexity_api_key=PERPLEXITY_API_KEY)
-            search_agent.process(str(latest_json))
+        print("\n" + "="*50)
+        print("EXTRACTING COMPANY NAME")
+        print("="*50)
+        
+        llm = ChatOpenAI(model_name="gpt-4", temperature=0)
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are a financial document analyzer. Your task is to extract the exact company name 
+                      from financial documents. Return ONLY the company name, no additional text."""),
+            ("user", """Please analyze this text and extract the company name.
+                    Return ONLY the company name, nothing else.
+                    
+                    Document text:
+                    {text}""")
+        ])
+        
+        print("\nAnalyzing document for company name...")
+        response = llm.invoke(prompt.format(text=pdf_text[:3000]))  # First 3000 chars should contain company name
+        
+        company_name = response.content.strip()
+        print(f"Found company name: {company_name}")
+        
+        return company_name
+        
     except Exception as e:
-        print(f"Article search error: {e}")
-    
-    return result
+        print(f"Error extracting company name: {e}")
+        return "Unknown Company"
 
-def main():
+def process_document(file_path: str) -> Dict[str, Any]:
+    """Process a document and extract financial data."""
     try:
-        # Step 1: Process the document
-        file_path = "document_processing/upload/Netflix-10-K-01262024.pdf"
-        print("\nProcessing document...")
-        extracted_data = process_document(file_path)
+        print("Processing document...")
+        processor = FinancialDocumentProcessor()
         
-        # Get the path of the last created JSON file in the extracted directory
-        extracted_dir = Path("document_processing/extracted")
-        json_files = list(extracted_dir.glob("*.json"))
-        latest_json = max(json_files, key=lambda x: x.stat().st_mtime)
+        # Look for any PDF file in the upload directory
+        upload_dir = Path("document_processing/upload")
+        if not upload_dir.exists():
+            print(f"Creating upload directory: {upload_dir}")
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            
+        pdf_files = list(upload_dir.glob("*.pdf"))
+        if not pdf_files:
+            print("\nNo PDF files found in upload directory!")
+            print(f"Please place your PDF file in: {upload_dir.absolute()}")
+            print("Then run this script again.")
+            return None
+            
+        # Use the most recently modified PDF file
+        latest_pdf = max(pdf_files, key=lambda x: x.stat().st_mtime)
+        print(f"Processing file: {latest_pdf}")
         
-        # Step 2: Search for articles
-        print("\nStarting article search...")
-        search_agent = SearchAgent(perplexity_api_key=PERPLEXITY_API_KEY)
-        articles_path = search_agent.process(str(latest_json))
+        # Extract text for company name
+        with open(latest_pdf, 'rb') as file:
+            reader = PyPDF2.PdfReader(file)
+            text = ""
+            # Get text from first few pages
+            for i in range(min(3, len(reader.pages))):
+                text += reader.pages[i].extract_text() + "\n"
         
-        print("\nProcess completed successfully!")
-        print(f"1. Financial data: {latest_json}")
-        print(f"2. Articles data: {articles_path}")
-
+        # Extract company name using GPT-4
+        company_name = extract_company_name(text)
+        
+        # Process document
+        extracted_data = processor.process_document(str(latest_pdf))
+        
+        # Combine data with company name
+        enhanced_data = {
+            "company_name": company_name,
+            "financial_data": extracted_data,
+            "processing_date": datetime.now().isoformat(),
+            "source_file": str(latest_pdf.name)
+        }
+        
+        # Save enhanced JSON
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_path = Path("document_processing/extracted_data") / f"financial_data_{timestamp}.json"
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(json_path, 'w') as f:
+            json.dump(enhanced_data, f, indent=2)
+            
+        print(f"\nSaved enhanced data to: {json_path}")
+        return enhanced_data
+        
     except Exception as e:
         print(f"Error in processing: {str(e)}")
         raise
+
+def main():
+    """Main function to process documents."""
+    try:
+        # Create extracted_data directory if it doesn't exist
+        json_dir = Path("document_processing/extracted_data")
+        json_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Process new document first
+        file_path = "document_processing/upload"
+        print("\nProcessing new document...")
+        extracted_data = process_document(file_path)
+        
+        if extracted_data:
+            print("\nProcessing complete!")
+            print(json.dumps(extracted_data, indent=2))
+            
+            # Now check for JSON files after processing
+            json_files = list(json_dir.glob("*.json"))
+            if json_files:
+                latest_json = max(json_files, key=lambda x: x.stat().st_mtime)
+                print(f"\nLatest extracted data saved to: {latest_json}")
+            
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     # Set watch_mode=True if you want to keep watching for new files
